@@ -20,6 +20,10 @@ class Cosp : public AtmosphereProcess
 {
 
 public:
+  using PF  = scream::PhysicsFunctions<HostDevice>;
+  using KT  = KokkosTypes<DefaultDevice>;
+  using KTH = KokkosTypes<HostDevice>;
+
   // Constructors
   Cosp (const ekat::Comm& comm, const ekat::ParameterList& params);
 
