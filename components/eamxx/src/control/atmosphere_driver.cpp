@@ -58,9 +58,7 @@ namespace control {
  *     Note: at this stage, atm procs that act on non-ref grid(s) should be able to create their
  *           remappers. The AD will *not* take care of remapping inputs/outputs of the process.
  *  4) Register all fields and all groups from all atm procs inside the field managers, and proceed
- *     to allocate fields. Each field manager (there is one FM per grid) will take care of
- *     accommodating all requests for packing as well as (if possible) bundling of groups.
- *     For more details, see the documentation in the share/field/field_request.hpp header.
+ *     to allocate fields. For more details, see the documentation in the share/field/field_request.hpp header.
  *  5) Set all the fields into the atm procs. Before this point, all the atm procs had were the
  *     FieldIdentifiers for their input/output fields and FieldGroupInfo for their input/output
  *     field groups. Now, we pass actual Field and FieldGroup objects to them, where both the
@@ -405,7 +403,7 @@ void AtmosphereDriver::reset_accumulated_fields ()
     }
 
     auto accum_group = m_field_mgr->get_field_group("ACCUMULATED", grid_name);
-    for (auto f_it : accum_group.m_fields) {
+    for (auto f_it : accum_group.m_individual_fields) {
       auto& track = f_it.second->get_header().get_tracking();
       f_it.second->deep_copy(zero);
       track.set_accum_start_time(m_current_ts);
@@ -535,8 +533,12 @@ void AtmosphereDriver::create_fields()
   m_field_mgr = std::make_shared<field_mgr_type>(m_grids_manager);
   m_field_mgr->registration_begins();
 
-  // By now, the processes should have fully built the ids of their
-  // required/computed fields and groups. Let them register them in the FM
+  // Before registering fields, check that Field Requests for tracers are compatible
+  // and store the correct type of turbulence advection for each tracer
+  m_atm_process_group->pre_process_tracer_requests();
+
+  // Register required/computed fields. By now, the processes should have
+  // fully built the ids of their required/computed fields and groups
   for (const auto& req : m_atm_process_group->get_required_field_requests()) {
     m_field_mgr->register_field(req);
   }
@@ -599,8 +601,8 @@ void AtmosphereDriver::create_fields()
     m_field_mgr->add_to_group(fid, "RESTART");
   }
   for (const auto& g : m_atm_process_group->get_groups_in()) {
-    if (g.m_bundle) {
-      m_field_mgr->add_to_group(g.m_bundle->get_header().get_identifier(), "RESTART");
+    if (g.m_monolithic_field) {
+      m_field_mgr->add_to_group(g.m_monolithic_field->get_header().get_identifier(), "RESTART");
     } else {
       for (const auto& fn : g.m_info->m_fields_names) {
         m_field_mgr->add_to_group(fn, g.grid_name(), "RESTART");
@@ -973,6 +975,10 @@ void AtmosphereDriver::create_logger () {
   auto& driver_options_pl = m_atm_params.sublist("driver_options");
 
   ci_string log_fname = driver_options_pl.get<std::string>("Atm Log File","atm.log");
+  if (is_scream_standalone()) {
+    // Useful for concurrent unit tests in the same folder
+    log_fname += ".np" + std::to_string (m_atm_comm.size());
+  }
   ci_string log_level = driver_options_pl.get<std::string>("atm_log_level","info");
   ci_string flush_level = driver_options_pl.get<std::string>("atm_flush_level","warn");
   EKAT_REQUIRE_MSG (log_fname!="",
@@ -1128,19 +1134,19 @@ void AtmosphereDriver::set_initial_conditions ()
   // ...then the input groups
   m_atm_logger->debug("    [EAMxx] Processing input groups ...");
   for (const auto& g : m_atm_process_group->get_groups_in()) {
-    if (g.m_bundle) {
-      process_ic_field(*g.m_bundle);
+    if (g.m_monolithic_field) {
+      process_ic_field(*g.m_monolithic_field);
     }
-    for (auto it : g.m_fields) {
+    for (auto it : g.m_individual_fields) {
       process_ic_field(*it.second);
     }
   }
   m_atm_logger->debug("    [EAMxx] Processing input groups ... done!");
 
-  // Some fields might be the subfield of a group's bundled field. In that case,
-  // we only need to init one: either the bundled field, or all the individual subfields.
+  // Some fields might be the subfield of a group's monolithic field. In that case,
+  // we only need to init one: either the monolithic field, or all the individual subfields.
   // So loop over the fields that appear to require loading from file, and remove
-  // them from the list if they are the subfield of a bundled field already inited
+  // them from the list if they are the subfield of a groups monolithic field already inited
   // (perhaps via initialize_constant_field, or copied from another field).
   for (auto& it1 : ic_fields_names) {
     const auto& grid_name =  it1.first;
@@ -1244,17 +1250,17 @@ void AtmosphereDriver::set_initial_conditions ()
   }
   m_atm_logger->debug("    [EAMxx] Processing fields to copy ... done!");
 
-  // It is possible to have a bundled group G1=(f1,f2,f3),
+  // It is possible to have a monolithically allocated group G1=(f1,f2,f3),
   // where the IC are read from file for f1, f2, and f3. In that case,
-  // the time stamp for the bundled G1 has not be inited, but the data
+  // the time stamp for the monolithic field of G1 has not be inited, but the data
   // is valid (all entries have been inited). Let's fix that.
   m_atm_logger->debug("    [EAMxx] Processing subfields ...");
   for (const auto& g : m_atm_process_group->get_groups_in()) {
-    if (g.m_bundle) {
-      auto& track = g.m_bundle->get_header().get_tracking();
+    if (g.m_monolithic_field) {
+      auto& track = g.m_monolithic_field->get_header().get_tracking();
       if (not track.get_time_stamp().is_valid()) {
-        // The bundled field has not been inited. Check if all the subfields
-        // have been inited. If so, init the timestamp of the bundled field too.
+        // The groups monolithic field has not been inited. Check if all the subfields
+        // have been inited. If so, init the timestamp of the monlithic field too.
         const auto& children = track.get_children();
         bool all_inited = children.size()>0; // If no children, then something is off, so mark as not good
         for (auto wp : children) {
@@ -1632,7 +1638,7 @@ void AtmosphereDriver::run (const int dt) {
     }
 
     auto rescale_group = m_field_mgr->get_field_group("DIVIDE_BY_DT", gname);
-    for (auto f_it : rescale_group.m_fields) {
+    for (auto f_it : rescale_group.m_individual_fields) {
       f_it.second->scale(Real(1) / dt);
     }
   }
