@@ -7,6 +7,7 @@
 #include <physics/mam/physical_limits.hpp>
 
 #include "ekat/util/ekat_units.hpp"
+#include <share/property_checks/field_within_interval_check.hpp>
 /*
 -----------------------------------------------------------------
 NOTES:
@@ -205,6 +206,21 @@ void MAMAci::init_buffers(const ATMBufferManager &buffer_manager) {
 //  INITIALIZE_IMPL
 // ================================================================
 void MAMAci::initialize_impl(const RunType run_type) {
+
+  for(int mode = 0; mode < mam_coupling::num_aero_modes(); ++mode) {
+    const std::string int_nmr_field_name =
+        mam_coupling::int_aero_nmr_field_name(mode);
+    add_invariant_check<FieldWithinIntervalCheck>(get_field_out(int_nmr_field_name), grid_,0,1.e11,false);
+
+    for(int a = 0; a < mam_coupling::num_aero_species(); ++a) {
+      const std::string int_mmr_field_name =
+          mam_coupling::int_aero_mmr_field_name(mode, a);
+      if(not int_mmr_field_name.empty()) {
+        add_invariant_check<FieldWithinIntervalCheck>(get_field_out(int_mmr_field_name), grid_,0.0,1.e5,true);
+      }
+    }  // end for loop num species
+  }    // end for loop for num modes
+
   // ------------------------------------------------------------------------
   // ## Runtime options
   // ------------------------------------------------------------------------
@@ -437,6 +453,15 @@ void MAMAci::initialize_impl(const RunType run_type) {
 //  RUN_IMPL
 // ================================================================
 void MAMAci::run_impl(const double dt) {
+
+  auto gid2lid = grid_->get_gid2lid_map();
+  const int gid = 183;
+  const int kb = 58;
+  const int num_a1_idx = 22;
+  auto lid = gid2lid.count(gid) == 1 ? gid2lid.at(gid) : -1;
+  auto h_num_a1 = Kokkos::create_mirror_view(dry_aero_.int_aero_nmr[0]);
+
+
   const auto scan_policy = ekat::ExeSpaceUtils<
       KT::ExeSpace>::get_thread_range_parallel_scan_team_policy(ncol_, nlev_);
 
@@ -444,6 +469,11 @@ void MAMAci::run_impl(const double dt) {
   // quantities
   Kokkos::parallel_for("preprocess", scan_policy, preprocess_);
   Kokkos::fence();
+
+    if (lid != -1) {
+    Kokkos::deep_copy(h_num_a1, dry_aero_.int_aero_nmr[0]);
+    Kokkos::printf("apreproc lid = %d, h_num_a1= %e\n", lid, h_num_a1(lid,kb));
+  }
 
   haero::ThreadTeamPolicy team_policy(ncol_, Kokkos::AUTO);
 
@@ -475,6 +505,10 @@ void MAMAci::run_impl(const double dt) {
   //  Compute Ice nucleation
   //  NOTE: The Fortran version uses "ast" for cloud fraction which is
   //  equivalent to "cldfrac_tot" in FM. It is part of the "dry_atm_" struct
+  if (lid != -1) {
+    Kokkos::deep_copy(h_num_a1, dry_aero_.int_aero_nmr[0]);
+    Kokkos::printf("bnuc lid = %d, h_num_a1= %e\n", lid, h_num_a1(lid,kb));
+  }
   compute_nucleate_ice_tendencies(
       nucleate_ice_, team_policy, dry_atm_, dry_aero_, wsubice_,
       aitken_dry_dia_, nlev_, dt,
@@ -499,7 +533,14 @@ void MAMAci::run_impl(const double dt) {
   //  Compute activated CCN number tendency (tendnd_) and updated
   //  cloud borne aerosols (stored in a work array) and interstitial
   //  aerosols tendencies
-  call_function_dropmixnuc(
+  /*if (lid == 42) {
+    Kokkos::printf("BALLI-Call dropmix-0\n");
+}*/
+if (lid != -1) {
+    Kokkos::deep_copy(h_num_a1, dry_aero_.int_aero_nmr[0]);
+    Kokkos::printf("bdrop lid = %d, h_num_a1= %e\n", lid, h_num_a1(lid,kb));
+  }
+  call_function_dropmixnuc(lid, kb, num_a1_idx,
       team_policy, dt, dry_atm_, rpdel_, kvh_mid_, kvh_int_, wsub_, cloud_frac_,
       cloud_frac_prev_, dry_aero_, nlev_, top_lev_, enable_aero_vertical_mix_,
       // output
@@ -509,6 +550,14 @@ void MAMAci::run_impl(const double dt) {
       // work arrays
       raercol_cw_, raercol_, state_q_work_, nact_, mact_,
       dropmixnuc_scratch_mem_);
+if (lid != -1) {
+    auto h_ptend_q_ = Kokkos::create_mirror_view(ptend_q_[num_a1_idx]);
+    Kokkos::deep_copy(h_ptend_q_, ptend_q_[num_a1_idx]);
+    auto h_factnum_ = Kokkos::create_mirror_view(factnum_);
+    Kokkos::deep_copy(h_factnum_, factnum_);
+    Kokkos::printf("lid = %d, h_ptend_q_= %e, h_factnum_ %e\n", lid, h_ptend_q_(lid,kb), h_factnum_(lid,num_a1_idx,kb));
+}
+
   Kokkos::fence();  // wait for ptend_q_ to be computed.
 
   Kokkos::deep_copy(ccn_0p02_,
@@ -549,12 +598,19 @@ void MAMAci::run_impl(const double dt) {
                               dry_aero_);
 
   // Update interstitial aerosols using tendencies
-  update_interstitial_aerosols(team_policy, ptend_q_, nlev_, dt,
+  update_interstitial_aerosols(team_policy, ptend_q_, nlev_, dt,lid,
                                // output
                                dry_aero_);
 
   // call post processing to convert dry mixing ratios to wet mixing ratios
-
+  Kokkos::deep_copy(h_num_a1, dry_aero_.int_aero_nmr[0]);
+  if (lid != -1) {
+    Kokkos::printf("End-lid = %d, h_num_a1= %e\n", lid, h_num_a1(lid,kb));
+    EKAT_KERNEL_REQUIRE_MSG(
+        h_num_a1(lid,kb) >= 0.0,
+        "ERROR: Negative number mixing ratio for interstitial aerosol "
+        "species num_a1 at column id");
+  }
   post_process(wet_aero_, dry_aero_, dry_atm_);
   Kokkos::fence();  // wait before returning to calling function
 }

@@ -167,6 +167,8 @@ void MAMGenericInterface::add_tracers_interstitial_aerosol() {
         mam_coupling::int_aero_nmr_field_name(mode);
     add_tracer<Updated>(int_nmr_field_name, grid_, n_unit, 1,
                         TracerAdvection::DynamicsOnly);
+    //add_invariant_check<FieldWithinIntervalCheck>(get_field_out(int_nmr_field_name), grid_,0.0,1.e11,false);
+
     for(int a = 0; a < mam_coupling::num_aero_species(); ++a) {
       // (interstitial) aerosol tracers of interest: mass (q) mixing ratios
       const std::string int_mmr_field_name =
@@ -174,6 +176,7 @@ void MAMGenericInterface::add_tracers_interstitial_aerosol() {
       if(not int_mmr_field_name.empty()) {
         add_tracer<Updated>(int_mmr_field_name, grid_, q_unit, 1,
                             TracerAdvection::DynamicsOnly);
+        //add_invariant_check<FieldWithinIntervalCheck>(get_field_out(int_mmr_field_name), grid_,0.0,1.e5,false);
       }
     }  // end for loop num species
   }    // end for loop for num modes
@@ -199,6 +202,7 @@ void MAMGenericInterface::populate_cloudborne_wet_aero(
         mam_coupling::cld_aero_nmr_field_name(m);
     wet_aero.cld_aero_nmr[m] =
         get_field_out(cld_nmr_field_name).get_view<Real **>();
+    //add_invariant_check<FieldWithinIntervalCheck>(get_field_out(cld_nmr_field_name), grid_,0.0,1.e11,false);
 
     for(int a = 0; a < mam_coupling::num_aero_species(); ++a) {
       // (cloudborne) aerosol tracers of interest: mass (q) mixing ratios
@@ -207,6 +211,7 @@ void MAMGenericInterface::populate_cloudborne_wet_aero(
       if(not cld_mmr_field_name.empty()) {
         wet_aero.cld_aero_mmr[m][a] =
             get_field_out(cld_mmr_field_name).get_view<Real **>();
+        //add_invariant_check<FieldWithinIntervalCheck>(get_field_out(cld_mmr_field_name), grid_,0.0,1.e5,false);
       }
     }
   }

@@ -90,6 +90,21 @@ void MAMConstituentFluxes::init_buffers(
 //  INITIALIZE_IMPL
 // ================================================================
 void MAMConstituentFluxes::initialize_impl(const RunType run_type) {
+
+  for(int mode = 0; mode < mam_coupling::num_aero_modes(); ++mode) {
+    const std::string int_nmr_field_name =
+        mam_coupling::int_aero_nmr_field_name(mode);
+    add_invariant_check<FieldWithinIntervalCheck>(get_field_out(int_nmr_field_name), grid_,0,1.e11,false);
+
+    for(int a = 0; a < mam_coupling::num_aero_species(); ++a) {
+      const std::string int_mmr_field_name =
+          mam_coupling::int_aero_mmr_field_name(mode, a);
+      if(not int_mmr_field_name.empty()) {
+        add_invariant_check<FieldWithinIntervalCheck>(get_field_out(int_mmr_field_name), grid_,0.0,1.e5,true);
+      }
+    }  // end for loop num species
+  }    // end for loop for num modes
+
   // ---------------------------------------------------------------
   // Input fields read in from IC file, namelist or other processes
   // ---------------------------------------------------------------
@@ -153,6 +168,13 @@ void MAMConstituentFluxes::run_impl(const double dt) {
   // copy of each member.
   const auto &wet_atm = wet_atm_;
   const auto &dry_atm = dry_atm_;
+
+auto gid2lid = grid_->get_gid2lid_map();
+int gid                                   = 216;
+auto lid = gid2lid.count(gid) == 1 ? gid2lid.at(gid) : -1;
+
+  auto host_view = Kokkos::create_mirror_view(dry_atm.T_mid);
+  if (lid !=-1)Kokkos::printf("BALLI-con-Tmid is: %e\n", host_view(29,71));
 
   auto lambda =
       KOKKOS_LAMBDA(const Kokkos::TeamPolicy<KT::ExeSpace>::member_type &team) {

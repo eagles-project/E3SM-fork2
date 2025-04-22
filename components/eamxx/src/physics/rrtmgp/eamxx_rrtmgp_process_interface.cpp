@@ -691,6 +691,12 @@ void RRTMGPRadiation::initialize_impl(const RunType /* run_type */) {
   // Set property checks for fields in this process
   add_invariant_check<FieldWithinIntervalCheck>(get_field_out("T_mid"),m_grid,100.0, 500.0,false);
 
+
+  add_invariant_check<FieldWithinIntervalCheck>(get_field_in("aero_tau_sw"), m_grid,0.0, 1.0,false);
+  add_invariant_check<FieldWithinIntervalCheck>(get_field_in("aero_ssa_sw"), m_grid,0.0, 1.0,false);
+  add_invariant_check<FieldWithinIntervalCheck>(get_field_in("aero_g_sw"), m_grid,0.0, 1.0,false);
+  add_invariant_check<FieldWithinIntervalCheck>(get_field_in("aero_tau_lw"), m_grid,0.0, 1.0,false);
+
   // VMR of n2 and co is currently prescribed as a constant value, read from file
   if (has_computed_field("n2_volume_mix_ratio",m_grid->name())) {
     auto n2_vmr = get_field_out("n2_volume_mix_ratio").get_view<Real**>();
@@ -732,6 +738,20 @@ void RRTMGPRadiation::run_impl (const double dt) {
   // Output fields
   auto d_tmid = get_field_out("T_mid").get_view<Real**>();
   auto d_cldfrac_rad = get_field_out("cldfrac_rad").get_view<Real**>();
+
+
+  auto gid2lid = m_grid->get_gid2lid_map();
+  int gid                                   = 87;
+  auto lid = gid2lid.count(gid) == 1 ? gid2lid.at(gid) : -1;
+  auto h_tmid = Kokkos::create_mirror_view(d_tmid);
+  Kokkos::deep_copy(h_tmid, d_tmid);
+  //icol is obtained from the kokkos loop on icols
+  if (lid != -1) {
+    Kokkos::printf("lid = %d, temp= %e\n", lid, h_tmid(lid,0));
+  }
+
+  
+
 
   // Aerosol optics only exist if m_do_aerosol_rad is true, so declare views and copy from FM if so
   using view_3d = Field::view_dev_t<const Real***>;
@@ -1790,6 +1810,13 @@ void RRTMGPRadiation::run_impl (const double dt) {
       }
     });
   });
+
+  Kokkos::deep_copy(h_tmid, d_tmid);
+  //icol is obtained from the kokkos loop on icols
+  if (lid != -1) {
+    Kokkos::printf("After-lid = %d, temp= %e\n", lid, h_tmid(lid,0));
+  }
+
 
   // If necessary, set appropriate boundary fluxes for energy and mass conservation checks.
   // Any boundary fluxes not included in radiation interface are set to 0.

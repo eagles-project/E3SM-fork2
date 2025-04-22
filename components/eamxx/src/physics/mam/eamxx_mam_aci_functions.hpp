@@ -196,7 +196,7 @@ void store_liquid_cloud_fraction(
       });
 }
 
-void call_function_dropmixnuc(
+void call_function_dropmixnuc(const int lid, const int kb, const int num_a1_idx,
     haero::ThreadTeamPolicy team_policy, const Real dt,
     mam_coupling::DryAtmosphere &dry_atmosphere, const MAMAci::view_2d rpdel,
     const MAMAci::const_view_2d kvh_mid, const MAMAci::view_2d kvh_int,
@@ -385,6 +385,9 @@ void call_function_dropmixnuc(
                   ++icnst) {
                 state_q_work_loc(icol, klev, icnst) = state_q_at_lev_col[icnst];
               }
+              if (icol == lid && klev == kb) {
+                Kokkos::printf("BALLI-Call dropmix-1 state_q %e\n", state_q_work_loc(icol, klev, num_a1_idx));
+              } 
 
               // get qqcw at a grid cell (col,lev)
               // NOTE: The layout for qqcw array is based on mam_idx in
@@ -404,7 +407,10 @@ void call_function_dropmixnuc(
               }
             });
         team.team_barrier();
-        mam4::ndrop::dropmixnuc(
+        /*if (icol ==lid) {
+            Kokkos::printf("BALLI-Call dropmix-2\n");
+        }*/
+        mam4::ndrop::dropmixnuc( lid, icol, kb, num_a1_idx,
             team, dt, ekat::subview(T_mid, icol), ekat::subview(p_mid, icol),
             ekat::subview(p_int, icol), ekat::subview(pdel, icol),
             ekat::subview(rpdel, icol),
@@ -459,7 +465,7 @@ void update_cloud_borne_aerosols(
 void update_interstitial_aerosols(
     haero::ThreadTeamPolicy team_policy,
     const MAMAci::view_2d ptend_q[mam4::aero_model::pcnst], const int nlev,
-    const Real dt,
+    const Real dt, const int lid,
     // output
     mam_coupling::AerosolState &dry_aero) {
   // starting index of ptend_q array (for MAM4, pcnst=40, ncnst_tot=25 )
@@ -473,6 +479,7 @@ void update_interstitial_aerosols(
 
       if(aero_mmr.data()) {
         const auto ptend_view = ptend_q[s_idx];
+        //if(lid != -1)Kokkos::printf("update_interstitial_aerosols: %d %d %d %d\n", lid, m, a, s_idx);
         Kokkos::parallel_for(
             team_policy, KOKKOS_LAMBDA(const haero::ThreadTeam &team) {
               const int icol = team.league_rank();
@@ -489,6 +496,7 @@ void update_interstitial_aerosols(
     auto aero_nmr =
         dry_aero.int_aero_nmr[m];  // number mixing ratio for mode "m"
     const auto ptend_view = ptend_q[s_idx];
+    //if(lid != -1)Kokkos::printf("update_interstitial_aerosols: %d %d %d\n", lid, m, s_idx);
     Kokkos::parallel_for(
         team_policy, KOKKOS_LAMBDA(const haero::ThreadTeam &team) {
           const int icol = team.league_rank();

@@ -106,6 +106,28 @@ void MAMOptics::initialize_impl(const RunType run_type) {
   // Check the interval values for the following fields used by this interface.
   // NOTE: We do not include aerosol and gas species, e.g., soa_a1, num_a1,
   // because we automatically added these fields.
+
+
+  for(int mode = 0; mode < mam_coupling::num_aero_modes(); ++mode) {
+    const std::string int_nmr_field_name =
+        mam_coupling::int_aero_nmr_field_name(mode);
+    add_invariant_check<FieldWithinIntervalCheck>(get_field_out(int_nmr_field_name), grid_,-1,1.e11,false);
+
+    for(int a = 0; a < mam_coupling::num_aero_species(); ++a) {
+      const std::string int_mmr_field_name =
+          mam_coupling::int_aero_mmr_field_name(mode, a);
+      if(not int_mmr_field_name.empty()) {
+        add_invariant_check<FieldWithinIntervalCheck>(get_field_out(int_mmr_field_name), grid_,0.0,1.e5,true);
+      }
+    }  // end for loop num species
+  }    // end for loop for num modes
+
+  add_invariant_check<FieldWithinIntervalCheck>(get_field_out("aero_tau_sw"), grid_,0.0, 1.0,false);
+  add_invariant_check<FieldWithinIntervalCheck>(get_field_out("aero_ssa_sw"), grid_,0.0, 1.0,false);
+  add_invariant_check<FieldWithinIntervalCheck>(get_field_out("aero_g_sw"), grid_,0.0, 1.0,false);
+  add_invariant_check<FieldWithinIntervalCheck>(get_field_out("aero_tau_lw"), grid_,0.0, 1.0,false);
+  add_invariant_check<FieldWithinIntervalCheck>(get_field_in("pseudo_density_dry"), grid_,0.0, 1.0e6,false);
+
   const std::map<std::string, std::pair<Real, Real>> ranges_optics = {
       // optics
       {"pseudo_density_dry", {-1e10, 1e10}},  // FIXME
